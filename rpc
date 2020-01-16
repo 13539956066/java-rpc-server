@@ -1,0 +1,289 @@
+
+public interface MathService {
+    public int getSum(int a, int b, String name);
+}
+public class MathServiceImpl implements MathService {
+    public int getSum(int a, int b, String name) {
+        System.out.println(name + " call:" + a + "+" + b);
+        return a + b;
+    }
+}
+
+
+# ============ RPCClient
+
+import java.io.IOException;
+        import java.io.ObjectInputStream;
+        import java.io.ObjectOutputStream;
+        import java.net.Socket;
+        import java.net.UnknownHostException;
+
+ 
+
+public class RPCClient {
+    private String serverAddress;
+    private int serverPort;
+
+    public RPCClient() {
+        super();
+    }
+
+    public RPCClient(String serverAddress, int serverPort) {
+        this.serverAddress = serverAddress;
+        this.serverPort = serverPort;
+    }
+
+    /**
+     * 同步的请求和接收结果
+     */
+    public Object sendAndReceive(TransportMessage transportMessage){
+        Object result = null;
+        try {
+            Socket socket = new Socket(serverAddress,serverPort);
+            ObjectOutputStream objectOutpusStream = new ObjectOutputStream(socket.getOutputStream());
+            objectOutpusStream.writeObject(transportMessage);
+
+            ObjectInputStream objectInputStream = new ObjectInputStream(socket.getInputStream());
+            result = objectInputStream.readObject();
+        } catch (UnknownHostException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        } catch (ClassNotFoundException e) {
+            e.printStackTrace();
+        }
+
+        return result;
+    }
+
+
+
+    public int getServerPort() {
+        return serverPort;
+    }
+
+    public void setServerPort(int serverPort) {
+        this.serverPort = serverPort;
+    }
+
+    public String getServerAddress() {
+        return serverAddress;
+    }
+
+    public void setServerAddress(String serverAddress) {
+        this.serverAddress = serverAddress;
+    }
+
+}
+
+# ============ RPCServer
+
+
+import java.io.IOException;
+        import java.io.ObjectInputStream;
+        import java.io.ObjectOutputStream;
+        import java.lang.reflect.InvocationTargetException;
+        import java.lang.reflect.Method;
+        import java.net.ServerSocket;
+        import java.net.Socket;
+        import java.util.HashMap;
+        import java.util.Map;
+        import java.util.concurrent.ExecutorService;
+        import java.util.concurrent.Executors;
+
+         
+
+public class RPCServer {
+    private int threadSize = 10;
+    private ExecutorService threadPool;
+    private Map<String, Object> servicePool;
+    private int port = 4321;
+
+    public RPCServer() {
+        super();
+        synchronized (this) {
+            threadPool = Executors.newFixedThreadPool(this.threadSize);
+        }
+    }
+
+    public RPCServer(int threadSize, int port) {
+        this.threadSize = threadSize;
+        this.port = port;
+        synchronized (this) {
+            threadPool = Executors.newFixedThreadPool(this.threadSize);
+        }
+    }
+
+    public RPCServer(Map<String, Object> servicePool, int threadSize, int port) {
+        this.threadSize = threadSize;
+        this.servicePool = servicePool;
+        this.port = port;
+        synchronized (this) {
+            threadPool = Executors.newFixedThreadPool(this.threadSize);
+        }
+    }
+
+    public void service() throws IOException {
+        ServerSocket serverSocket = new ServerSocket(port);
+        while (true) {
+            Socket receiveSocket = serverSocket.accept();
+            final Socket socket = receiveSocket;
+            threadPool.execute(new Runnable() {
+                public void run() {
+                    try {
+                        process(socket);
+                        socket.close();
+                    } catch (ClassNotFoundException e) {
+                        e.printStackTrace();
+                    } catch (NoSuchMethodException e) {
+                        e.printStackTrace();
+                    } catch (SecurityException e) {
+                        e.printStackTrace();
+                    } catch (IllegalAccessException e) {
+                        e.printStackTrace();
+                    } catch (IllegalArgumentException e) {
+                        e.printStackTrace();
+                    } catch (InvocationTargetException e) {
+                        e.printStackTrace();
+                    } catch (InstantiationException e) {
+                        e.printStackTrace();
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+
+                }
+            });
+        }
+    }
+
+    private void process(Socket receiveSocket) throws IOException,
+            ClassNotFoundException, NoSuchMethodException, SecurityException,
+            IllegalAccessException, IllegalArgumentException,
+            InvocationTargetException, InstantiationException {
+
+        ObjectInputStream objectinputStream = new ObjectInputStream(
+                receiveSocket.getInputStream());
+        TransportMessage message = (TransportMessage) objectinputStream
+                .readObject();
+
+        // 调用服务
+        Object result = call(message);
+
+        ObjectOutputStream objectOutputStream = new ObjectOutputStream(receiveSocket.getOutputStream());
+        objectOutputStream.writeObject(result);
+        objectOutputStream.close();
+    }
+
+    /**
+     * 服务处理函数 通过包名+接口名在servicePool中找到对应服务 通过调用方法参数类型数组获取Method对象
+     * 通过Method.invoke(对象,参数)调用对应服务
+     */
+    private Object call(TransportMessage message) throws ClassNotFoundException,
+            NoSuchMethodException, SecurityException, IllegalAccessException,
+            IllegalArgumentException, InvocationTargetException,
+            InstantiationException {
+        if (servicePool == null) {
+            synchronized (this) {
+                servicePool = new HashMap<String, Object>();
+            }
+        }
+        String interfaceName = message.getInterfaceName();
+        Object service = servicePool.get(interfaceName);
+        Class<?> serviceClass = Class.forName(interfaceName);
+        // 检查servicePool中对象,若没有着生产对象
+        if (service == null) {
+            synchronized (this) {
+                service = serviceClass.newInstance();
+                servicePool.put(interfaceName, service);
+            }
+        }
+        Method method = serviceClass.getMethod(message.getMethodName(),
+                message.getParamsTypes());
+        Object result = method.invoke(service, message.getParameters());
+        return result;
+    }
+
+    public int getThreadSize() {
+        return threadSize;
+    }
+
+    public void setThreadSize(int threadSize) {
+        this.threadSize = threadSize;
+    }
+
+    public ExecutorService getThreadPool() {
+        return threadPool;
+    }
+
+    public void setThreadPool(ExecutorService threadPool) {
+        this.threadPool = threadPool;
+    }
+
+    public Map<String, Object> getServicePool() {
+        return servicePool;
+    }
+
+    public void setServicePool(Map<String, Object> servicePool) {
+        this.servicePool = servicePool;
+    }
+}
+# ============ TransportMessage
+import java.io.Serializable;
+
+public class TransportMessage implements Serializable {
+    //包名+接口名称
+    private String interfaceName;
+    //调用方法名
+    private String methodName;
+    //参数类型 按照接口参数顺序
+    private Class[] paramsTypes;
+    //参数  按照接口参数顺序
+    private Object[] parameters;
+
+    public TransportMessage() {
+        super();
+        // TODO Auto-generated constructor stub
+    }
+
+    public TransportMessage(String interfaceName, String methodName,
+                            Class[] paramsTypes, Object[] parameters) {
+        super();
+        this.interfaceName = interfaceName;
+        this.methodName = methodName;
+        this.paramsTypes = paramsTypes;
+        this.parameters = parameters;
+    }
+
+    public String getInterfaceName() {
+        return interfaceName;
+    }
+
+    public void setInterfaceName(String interfaceName) {
+        this.interfaceName = interfaceName;
+    }
+
+    public String getMethodName() {
+        return methodName;
+    }
+
+    public void setMethodName(String methodName) {
+        this.methodName = methodName;
+    }
+
+    public Class[] getParamsTypes() {
+        return paramsTypes;
+    }
+
+    public void setParamsTypes(Class[] paramsTypes) {
+        this.paramsTypes = paramsTypes;
+    }
+
+    public Object[] getParameters() {
+        return parameters;
+    }
+
+    public void setParameters(Object[] parameters) {
+        this.parameters = parameters;
+    }
+
+}
